@@ -7,8 +7,9 @@
 示意图（Visual Representation）<br />
 ![Visual Representation](/img/VisualRepresentation.png "示意图（Visual Representation）")
 
-栈<br />
+栈（Stack）<br />
 从帧的栈里调用函数
+
 ```js
 function foo(b) {
   var a = 10;
@@ -26,5 +27,30 @@ console.log(bar(7)); //returns 42
 当`bar`调用`foo`的时候，第二个帧就被创建了并且被放到了第一个帧的上方，同样包含了`foo`的参数和本地变量。
 当`foo`return的时候，顶端的帧元素就从栈中被取出（这时只剩下`bar`在栈里了）。
 当`bar`return的时候，整个栈就空了。
+
+堆（Heap）<br />
+对象被放到一个堆里面，也就是一个用名字来表示的一大块多数非结构化的内存区域（a large mostly unstructured region of memory）。
+
+队列（Queue）<br />
+一个Javascript运行时使用消息队列，也就是一个就要被处理的消息列表。每个消息都有一个对应的函数被调用，以便处理消息。<br />
+某些时候，在事件循环中，运行时在队列中开始处理消息，从最旧的那个开始。为此，消息被从队列中移除，而对应的函数被以消息作为输入参数的方式调用。
+同样地，调用一个函数就会创建一个新的栈帧给函数使用。<br />
+函数的处理会一直持续到栈又一次清空。然后事件循环就会继续处理下一个队列中的消息（如果有的话）。
+
+### 事件循环 - Event Loop ###
+
+事件循环因它的通常实现而得名，通常长这个样子：
+
+```js
+while (queue.waitForMessage()) {
+  queue.processNextMessage();
+}
+```
+
+`queue.waitForMessage()`同步等待一个消息的到来，如果目前没有的话。
+
+执行到完为止（Run-to-Completion）<br />
+在处理其他消息之前，每一个消息都会被完全处理。这就在解析（reasoning）你的程序的时候，提供了一些有趣的特性，包括，无论函数在何时运行，它都不能被捷足先登，而将会在其他代码运行之前运行（还能修改它自己维护的一套数据）。这点不同于C，举个例子来说，一个函数在一个线程里运行，它可以在任何点上被其他线程的其他代码中止。<br />
+这个模型的负面影响在于，如果完成一个消息花费了太长时间，应用程序就无法处理其他的用户交互，例如点击或者滚动。浏览器就会弹出一个写着“a script is taking too long to run”的对话框。比较好的做法是使一个消息尽可能地短或者如果可能的话，就把一个消息分割成几个消息来处理。
 
 ===未完待续
