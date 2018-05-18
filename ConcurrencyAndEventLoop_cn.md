@@ -112,4 +112,3 @@ while(true) {
 事件循环模型一个非常有趣的特性就是，Javascript不像许多其他语言一样，它永不阻塞。处理IO是典型的基于事件和回调来做的。所以当应用程序正在等待一个`indexDB`的查询返回或者是一个XHR请求的返回，它仍然可以处理其他事情比如用户输入。<br />
 遗留问题也存在，例如`alert`或者是同步的XHR。但是避免使用它们已经被认为是一种好的实践。需要注意的是，[凡事总有例外（exceptions to the exception do exist）](http://stackoverflow.com/questions/2734025/is-javascript-guaranteed-to-be-single-threaded/2734311#2734311)（但通常是由于引入了Bug，而非其他问题）。
 
-===未完待续
