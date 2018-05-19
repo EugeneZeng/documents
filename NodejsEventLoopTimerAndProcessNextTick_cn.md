@@ -68,13 +68,74 @@ _注：为了避免**poll**阶段让事件循环处于饥饿状态，[libuv](htt
 轮询（poll）<br />
 **poll**阶段有两个很重要的功能：<br />
 1. 计算它会阻塞或者轮询I/O多长时间，然后；
-2. 处理在**poll**队列中的事件<br />
-当事件循环进入轮询阶段，同时也没有安排定时器，那么以下两个事情当中的一个就会发生：
+2. 处理在**poll**队列中的事件
+
+当事件循环进入**poll**阶段，同时也没有安排定时器，那么以下两个事情当中的一个就会发生：
 * _如果轮询队列非空_，事件循环就会遍历它的回调队列，以同步的方式执行它们，直到队列耗尽为止，或者是到达了系统依赖的固定限制。
 * _如果轮询队列为空_，则会发生以下两种情况之一：
-  * 如果脚本是被`setImmediate()`安排的，事件循环就会结束当前的**poll**阶段，进入**check**阶段来执行那些安排好的脚本。
+  * 如果脚本是被`setImmediate()`安排的，事件循环就会结束当前的**poll**阶段，进入**check**阶段来执行那些安排好的脚本。
   * 如果脚本不是被`setImmediate()`安排的，事件循环就会等待回调加入队列，然后立即执行它们。
 
-一旦**轮询**队列空了，事件循环就会去检查哪些已经到达阀值的定时器，如果一个或者多个定时器已经准备好了，事件循环就会回到**timers**阶段，执行这些定时器的回调。
+一旦**poll**队列空了，事件循环就会去检查哪些已经到达阀值的定时器，如果一个或者多个定时器已经准备好了，事件循环就会回到**timers**阶段，执行这些定时器的回调。
+
+检查（check）<br />
+这个阶段允许人们在**poll**阶段结束后立即执行回调。如果**poll**阶段变得空闲而脚本已经跟随`setImmediate()`加入队列，事件循环就会继续**check**阶段而不是等待。<br />
+`setImmediate()`实际上是一个特殊的定时器，运行在事件循环的特定阶段。它用libuv的API在**poll**阶段结束后来安排回调的执行。<br />
+一般来说，随着代码的运行，事件循环最终会进入**poll**阶段，等待输入的连接，请求等等。然而，一个回调已经跟随`setImmediate()`加入队列，**poll**阶段就变得空闲了。他会结束掉然后继续**check**阶段而不是等待**poll**事件。
+
+关闭回调（close callbacks）<br />
+如果一个socket或者处理器突然被关闭（例如`socket.destroy()`），一个`close`事件将会在这个阶段触发。否则它就会通过`process.nextTick()`来触发。
+
+## `setImmediate()` VS `setTimeout()` ##
+`setImmediate()` 和 `setTimeout()`很相似，但它们按不同的方式行事，视乎它们在何时调用。
+* `setImmediate()`是设计用来在一旦当前**poll**阶段完成的时候就执行脚本。
+* `setTimeout()`是安排一个脚本在指定阀值毫秒数流逝后尽快执行。
+
+定时器执行的顺序会不一样，视乎它们执行时候的上下文。如果两个都从主模块里调用，那么时间将与处理性能相关（可能会被这个机器上正在运行的其他应用程序影响到）。<br />
+例如我们不在I/O环（即主模块）里面执行以下脚本，两个定时器执行的顺序是无法确定的，因为它跟处理性能相关：
+```js
+// timeout_vs_immediate.js
+setTimeout(() => {
+  console.log('timeout');
+}, 0);
+
+setImmediate(() => {
+  console.log('immediate');
+});
+```
+```
+$ node timeout_vs_immediate.js
+timeout
+immediate
+
+$ node timeout_vs_immediate.js
+immediate
+timeout
+```
+然而，如果你把两个调用放到一个I/O环里面，`setImmediate()`将永远都是第一个被执行的。
+
+```js
+// timeout_vs_immediate.js
+const fs = require('fs');
+
+fs.readFile(__filename, () => {
+  setTimeout(() => {
+    console.log('timeout');
+  }, 0);
+  setImmediate(() => {
+    console.log('immediate');
+  });
+});
+```
+```
+$ node timeout_vs_immediate.js
+immediate
+timeout
+
+$ node timeout_vs_immediate.js
+immediate
+timeout
+```
+使用`setImmediate()` 而非 `setTimeout()`主要的优势在于`setImmediate()` 在I/O环里，将永远先于其他定时器执行，不管在场有多少个定时器。
 
 ==未完待续
