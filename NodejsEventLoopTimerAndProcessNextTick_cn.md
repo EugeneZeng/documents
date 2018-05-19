@@ -138,4 +138,68 @@ timeout
 ```
 使用`setImmediate()` 而非 `setTimeout()`主要的优势在于`setImmediate()` 在I/O环里，将永远先于其他定时器执行，不管在场有多少个定时器。
 
+## `process.nextTick()` ##
+理解`process.nextTick()`<br />
+你可能已经注意到了`process.nextTick()`并没有出现在这个示意图里面，尽管它是异步API的一部分。这是因为`process.nextTick()`不是事件循环技术上的部分。应该说，`nextTickQueue`会在当前操作完成后进行，不管事件循环的当前阶段。<br />
+回去看一下我们的示意图，在给定的阶段，任何时候调用`process.nextTick()`，所有传递给`process.nextTick()`的回调都会在事件循环继续之前解决。这样会创建一些非常坏的状况，因为它允许你**通过递归地调用`process.nextTick()`从而使I/O匮乏**，就会阻止事件循环到达**poll**阶段。
+
+为什么会允许这样呢？<br />
+为什么这种东西会加到Node.js里面来呢？一部分是因为一种设计哲学：一个API必须一直是异步的，即使有些地方它不一定是。以下列代码片段为例：
+```js
+function apiCall(arg, callback) {
+  if (typeof arg !== 'string')
+    return process.nextTick(callback,
+                            new TypeError('argument should be string'));
+}
+```
+这个片段是用来做参数检查，如果不对，它将会传一个Error对象给回调函数。最近更新的API允许将参数传递给process.nextTick()，允许它在回调后传递的任何参数作为回调的参数，这样就不必嵌套函数了。<br />
+我们正在做的是仅当允许用户的其他代码执行后给用户传回一个Error。通过使用`process.nextTick()`，我们保证了`apiCall()`一定在用户的其他代码之后和在事件循环被允许继续之前会运行他的回调。为了达到这个目的，JS的执行栈被允许解开，然后立即执行提供的回调，这样就允许一个人使用递归调用`process.nextTick()`，而不会得到`RangeError: Maximum call stack size exceeded from v8`。<br />
+这种哲学思维可能会造成一些潜在的困境。以下面的代码片段为例：
+```js
+let bar;
+
+// this has an asynchronous signature, but calls callback synchronously
+function someAsyncApiCall(callback) { callback(); }
+
+// the callback is called before `someAsyncApiCall` completes.
+someAsyncApiCall(() => {
+  // since someAsyncApiCall has completed, bar hasn't been assigned any value
+  console.log('bar', bar); // undefined
+});
+
+bar = 1;
+```
+用户定义了`someAsyncApiCall()`去获取一个异步的签名，但实际上它同步地操作了。当它被调用的时候，`someAsyncApiCall()`提供的回调被在事件循环的同一阶段执行了，因为`someAsyncApiCall()`实际上并没有做任何异步的事情。结果就是，回调函数尝试引用`bar`，即使当前作用域没有那个变量，因为脚本无法运行到完成。<br />
+通过把回调放在一个`process.nextTick()`里，这个脚本仍然有能力执行到最后，允许所有的变量，函数等等在回调执行之前进行初始化。它还具有不允许事件循环继续的优点。这可能对那些想在事件循环继续之前想对错误发出警报的用户有用。以下是使用了`process.nextTick()`的上面那个例子：
+```js
+let bar;
+
+function someAsyncApiCall(callback) {
+  process.nextTick(callback);
+}
+
+someAsyncApiCall(() => {
+  console.log('bar', bar); // 1
+});
+
+bar = 1;
+```
+这是另一个真实的例子：
+```js
+const server = net.createServer(() => {}).listen(8080);
+
+server.on('listening', () => {});
+```
+当只有一个端口号被传入的时候，这个端口号立即就被绑定了。所以`'listening'`的回调会立即被调用。问题在于`.on('listening')`在这个时候还没有被设置呢。
+
+为了搞定这个，使`'listening'`事件加入到一个`nextTick()`的队列里来使脚本得以运行到最后。这样就允许用户设置任何他们想要的事件处理器了。
+
+`process.nextTick()` VS `setImmediate()`<br />
+就用户关心的而言，我们有两个类似的方法，但它们的名字令人困惑。
+* `process.nextTick()`在同一个阶段里立即触发。
+* `setImmediate()`在接下来的阶段或者是事件循环的某个瞬间触发。
+
+本质上来说，它们俩的名字应该调换过来。`process.nextTick()`比`setImmediate()`触发地更加及时。但这是过去的产物了，不太可能改变。让它俩名字交换可能会破坏NPM上的很大一部分的包。每天都会有很多新的模块加入到NPM，意味着我们等的每一天，都会有更多潜在的问题发生。当它们令人困惑的时候，名字自己并不会改变。<br />
+_我们推荐在任何情况下都使用`setImmediate()`，因为它更加容易理解（还有就是它让代码兼容更加广泛的执行环境，例如浏览器的js）_
+
 ==未完待续
