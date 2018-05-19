@@ -23,4 +23,46 @@ _注：在Windows和Unix/Linux中的实现有一些小小的差异，但这对�
 + **check**：`setImmediate()`的回调会在这里执行。
 + **close callbacks**：一些关闭的回调，比如`socket.on('close', ...)`。
 
+在事件循环的每次运行之间，Node.js都会检查它是否在等待异步I/O或者定时器，如果没有的话就关闭它。
+
+### 细说每个阶段 ###
+timers<br />
+定时器指定了一个阈值，在这个阈值之后，提供的回调会被执行，而不是人们希望它被执行的确切时间。定时器的回调会在指定的时间结束后被尽早安排运行。然而，操作系统的调度或者其他回调的运行可能会使它延时。<br />
+_注：技术上来说，[轮训阶段（poll phase）](https://nodejs.org/en/docs/guides/event-loop-timers-and-nexttick/#poll)控制定时器何时被执行_
+
+例如，你安排了一个定时任务在100ms后运行，然后你的脚本开始异步读取一个文件花了95ms。
+```js
+const fs = require('fs');
+
+function someAsyncOperation(callback) {
+  // Assume this takes 95ms to complete
+  fs.readFile('/path/to/file', callback);
+}
+
+const timeoutScheduled = Date.now();
+
+setTimeout(() => {
+  const delay = Date.now() - timeoutScheduled;
+
+  console.log(`${delay}ms have passed since I was scheduled`);
+}, 100);
+
+
+// do someAsyncOperation which takes 95 ms to complete
+someAsyncOperation(() => {
+  const startCallback = Date.now();
+
+  // do something that will take 10ms...
+  while (Date.now() - startCallback < 10) {
+    // do nothing
+  }
+});
+```
+当事件循环进入轮询阶段（poll phase）的时候，它有一个空的队列（`fs.readFile()`还没有完成），所以它会等多几个毫秒，直到最快的那个定时器的阀值为止。当它一直等到95ms过去了以后，`fs.readFile()`完成文件读取，它的回调花了10ms来加入轮询队列和执行。当这个回调完成了以后，队列中就没有其他回调了。这个时候事件循环就会看到最近的那个定时器的阀值已经到达，然后回到**timers**阶段去执行这个定时器的回调。在这个例子里，你会看到从定时器被安排好到它的回调被执行完毕的整个时长将会是105ms。
+
+_注：为了避免**poll**阶段让事件循环处于饥饿状态，[libuv](http://libuv.org/)（一个C的类库实现了Node.js的事件循环和所有这个平台上的异步行为）在它停止更多事件加入轮询之前，会有一个固定的最大限度（视乎系统配置）_
+
+等待回调<br />
+这个阶段为一些系统操作执行回调，比如TCP错误的类型。比如一个TCP的socket在尝试连接的时候接收到`ECONNREFUSED`信号，一些类Unix系统就会希望等待报告错误。这就会在等待回调阶段进行排队执行。
+
 ==未完待续
