@@ -202,4 +202,53 @@ server.on('listening', () => {});
 本质上来说，它们俩的名字应该调换过来。`process.nextTick()`比`setImmediate()`触发地更加及时。但这是过去的产物了，不太可能改变。让它俩名字交换可能会破坏NPM上的很大一部分的包。每天都会有很多新的模块加入到NPM，意味着我们等的每一天，都会有更多潜在的问题发生。当它们令人困惑的时候，名字自己并不会改变。<br />
 _我们推荐在任何情况下都使用`setImmediate()`，因为它更加容易理解（还有就是它让代码兼容更加广泛的执行环境，例如浏览器的js）_
 
-==未完待续
+为什么要用`process.nextTick()`<br />
+有两个主要的原因：
+1. 允许用户处理错误，清理其他不必要的资源，或者可能在事件循环继续之前尝试再次请求。
+2. 有时候允许在执行栈解体之后而在事件循环继续之前执行回调
+
+一个例子就能满足用户的期望。简单的例子：
+```js
+const server = net.createServer();
+server.on('connection', (conn) => { });
+
+server.listen(8080);
+server.on('listening', () => { });
+```
+话说`listen()`是在事件循环的开头运行的，但是listening的回调会放在一个`setImmediate()`里面。除非传入了一个主机名，这个端口的绑定将会立即发生效果。随着事件循环的进行，必定会进入**poll**阶段。这就意味着有绝对的机会（a non-zero chance）一个连接可以被接收，允许连接事件在监听事件之前被触发。<br />
+另一个例子是运行一个函数的构造器，继承`EventEmitter`然后在构造器里调用一个函数：
+```js
+const EventEmitter = require('events');
+const util = require('util');
+
+function MyEmitter() {
+  EventEmitter.call(this);
+  this.emit('event');
+}
+util.inherits(MyEmitter, EventEmitter);
+
+const myEmitter = new MyEmitter();
+myEmitter.on('event', () => {
+  console.log('an event occurred!');
+});
+```
+你不能够从构造器里立即触发一个事件，因为用户为这个事件分配一个回调的这个地方脚本还没有运行，所以在构造器自己内部，你可以用`process.nextTick()`设置一个回调在构造器完成之后来触发事件，这样就能达到预期的结果：
+```js
+const EventEmitter = require('events');
+const util = require('util');
+
+function MyEmitter() {
+  EventEmitter.call(this);
+
+  // use nextTick to emit the event once a handler is assigned
+  process.nextTick(() => {
+    this.emit('event');
+  });
+}
+util.inherits(MyEmitter, EventEmitter);
+
+const myEmitter = new MyEmitter();
+myEmitter.on('event', () => {
+  console.log('an event occurred!');
+});
+```
