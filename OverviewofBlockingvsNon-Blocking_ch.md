@@ -43,7 +43,29 @@ fs.readFile('/file.md', (err, data) => {
 在上面的第一个例子里，`console.log`会在`moreWork()`之前执行。在第二个例子里，`fs.readFile()`是非阻塞的，所以Javascript得以继续，`moreWork()`会先被调用。这种运行`moreWork()`而不需要等待文件读取完毕的能力就是一个关键的设计取向，实现了更高的吞吐量。
 
 ### 并发和吞吐量(Concurrency and Throughput) ###
-Javascript在Node.js里面的运行是单线程的,所以并发就指事件循环在完成其他工作之后执行Javascript回调函数的能力。
+Javascript在Node.js里面的运行是单线程的,所以并发就指事件循环在完成其他工作之后执行Javascript回调函数的能力。任何期望以并发形式运行的代码都必须允许事件循环继续运行,就像一些非Javascript的操作，例如I/O正在发生。<br />
+举个例子，让我们设想有一个案例，到web服务器的每一个请求都要花50ms来完成，其中45ms是花在数据库的I/O上，这是可以异步来完成的。选择非阻塞异步操作就可以为每个请求空出45ms来处理其他请求。选择**非阻塞**方法来代替**阻塞**方法，这是处理能力上最显著的差异。<br />
+事件循环是不同于其他语言的模型一样，可能会创建附加的线程来处理并发任务。
 
-
-==未完待续==
+### 混合阻塞和非阻塞代码的危险性（Dangers of Mixing Blocking and Non-Blocking Code） ###
+在处理I/O的时候，有一些模式是应该被避免的。让我们看看这个例子：
+```js
+const fs = require('fs');
+fs.readFile('/file.md', (err, data) => {
+  if (err) throw err;
+  console.log(data);
+});
+fs.unlinkSync('/file.md');
+``` 
+在上面的例子中，`fs.unlinkSync()`很可能会在`fs.readFile()`之前被运行，这样的话就会在被实际读取之前删掉`file.md`。一种更好的办法就是完全使用**非阻塞**方法和保证运行的正确顺序：
+```js
+const fs = require('fs');
+fs.readFile('/file.md', (readFileErr, data) => {
+  if (readFileErr) throw readFileErr;
+  console.log(data);
+  fs.unlink('/file.md', (unlinkErr) => {
+    if (unlinkErr) throw unlinkErr;
+  });
+});
+```
+上面在`fs.readFile()`回调里面的一个非阻塞`fs.unlink()`调用保证了操作的正确顺序。
