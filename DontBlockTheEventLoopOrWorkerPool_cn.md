@@ -1,4 +1,4 @@
-# 不要阻塞事件循环（或工作池） #
+# 别阻塞事件循环（或工作池） #
 ## 原文：《[Don't Block the Event Loop (or the Worker Pool)](https://nodejs.org/en/docs/guides/dont-block-the-event-loop/ "Don't Block the Event Loop (or the Worker Pool)")》 ##
 ### 你该阅读这篇文章吗？（Should you read this guide?） ###
 如果你正在写一些比简单的命令行脚本更复杂的东西，阅读这篇文章应该会帮助你写出更加高效，更加安全的应用程序。<br />
@@ -84,5 +84,50 @@ app.get('/countToN2', (req, res) => {
   res.sendStatus(200);
 });
 ```
+那你该多小心呢？<br />
+Node用Google的V8引擎来解析Javascript，对普通的操作来说已经是很快的了。不过正则表达式和JSON的操作是例外,以下会讨论到。<br />
+然而，对于复杂的任务，你应该考虑限制输入和拒绝太长的输入。那样的话，即使你的回调函数非常复杂，通过限制输入，也可以让你保证回调不会比处理最长输入的最坏情况花的时间多。然后你就可以评估这个回调的最坏情况成本和决定它的运行时间是否在你的接受范围内。
+
+事件循环的阻塞：REDOS<br />
+一个常见的方法来阻塞事件循环，是用一种“脆弱（vulnerable）”的正则表达式。
+
+避免脆弱的正则表达式<br />
+一个正则表达式（regexp）依据一个模式语句（pattern）来匹配输入的字符串。我们通常认为一个正则表达式的匹配需要执行对输入字符串的一次扫描（pass through）——`0(n)`复杂度，n为字符串的长度。在多数的情况下，单次扫描的确是必须的。<br />
+不幸的是，在一些情况下，正则匹配可能会要求指数级`0(2^n)`的扫描测试（trips）次数。一个指数级别的扫描测试意味着如果引擎要求`x`次测试来决定一个匹配，如果输入字符串长度大于一那它就需要`2^x`次的扫描测试。<br />
+一个*脆弱的正则表达式（ulnerable regular expression）*就是那个让你的正则表达式引擎运行指数级别的次数，用“恶意输入”使你遭受[正则表达式拒绝服务（REDOS）](https://www.owasp.org/index.php/Regular_expression_Denial_of_Service_-_ReDoS "Regular expression Denial of Service - ReDoS")攻击。你的正则表达式模式是否脆弱（即正则引擎可能会在基于它执行指数次数的扫描测试），实际上是个很难回答的问题，大多数情况下都取决于你是否正在使用Perl，Python，Ruby，Java或者JavaScript等等。但是这里有一些适用于这些语言的一些经验法则：
+1. 避免使用嵌套的数量符，例如`(a+)*`。Node的正则引擎虽然可以很快地处理其中的一些，但是另外一些就是脆弱的。
+2. 避免使用了重叠字句的OR，例如`(a|a)*`。同样地，这些有时候会很快。
+3. 避免使用反向引用，例如`(a.*) \1`。没有任何一个正则引擎能保证在线性次数`0(n)`里对它进行评估。
+4. 如果你只需要简单的字符串匹配，用`indexOf`或者是语法等价比较。这样比较简单而且永远不会需要`2^x`次的扫描测试。<br />
+如果你不确定你的正则表达式是否脆弱的，记住Node通常不会有问题报告，来报告一个脆弱正则或者长输入字符的_匹配_。当有不匹配但Node不能确定直到它在输入字符串上尝试了很多种路径以后，这样指数行为就被触发了。
+
+一个REDOS的例子<br />
+下面是个脆弱正则的例子，使它的服务器暴露在REDOS的威胁中：
+```js
+app.get('/redos-me', (req, res) => {
+  let filePath = req.query.filePath;
+
+  // REDOS
+  if (fileName.match(/(\/.+)+$/)) {
+    console.log('valid path');
+  }
+  else {
+    console.log('invalid path');
+  }
+
+  res.sendStatus(200);
+});
+```
+在这个例子中的脆弱正则是一种在Linux里检查有效路径的（差劲的）方法。它匹配那些用“/”分割的路径名组成的字符串，例如“a/b/c”。这是危险的，因为它违反了规则一：它有双层嵌套的数量符。<br />
+如果用户查询一个用`///.../\n`（100个“/”加上一个正则的“.”不会匹配的换行符），那么事件循环将会永远不停，这样就阻塞了事件循环。这个用户的REDOS攻击将导致其他用户在这个正则匹配完成之前无法被轮到。<br />
+由于这个原因，你应该在使用复杂的正则匹配去校验用户输入的时候聪明点。
+
+防REDOS攻击的资源<br />
+有些工具可以检查你的正则表达式的安全性，比如：
+* [safe-regex](https://github.com/substack/safe-regex "safe-regex 正则安全性检查工具")
+* [rxxr2](http://www.cs.bham.ac.uk/~hxt/research/rxxr2/ "rxxr2 正则安全性检查工具")<br />
+然而，这两个都不能够检查到所有的脆弱的正则表达式。<br />
+另一个途径就是使用不同的正则引擎。你可以使用node-re2模块，一个使用了Google的极速RE2的正则引擎。警告，RE2不是100%兼容Node的正则表达式，所以如果你用node-re2模块来处理你的正则表达式，就必须回归检查一下。特别复杂的正则表达式是不被node-re2支持的。<br />
+如果你尝试匹配一些“明显”的东西，像URL或者是文件路径之类的，可以从[正则库（regexp library）](http://www.regexlib.com/ "正则库（regexp library）")里找个例子或者使用一个npm模块，例如[ip-regex](https://www.npmjs.com/package/ip-regex "re-regex")。
 
 ===未完待续===To be Continue===
