@@ -125,9 +125,150 @@ app.get('/redos-me', (req, res) => {
 防REDOS攻击的资源<br />
 有些工具可以检查你的正则表达式的安全性，比如：
 * [safe-regex](https://github.com/substack/safe-regex "safe-regex 正则安全性检查工具")
-* [rxxr2](http://www.cs.bham.ac.uk/~hxt/research/rxxr2/ "rxxr2 正则安全性检查工具")<br />
+* [rxxr2](http://www.cs.bham.ac.uk/~hxt/research/rxxr2/ "rxxr2 正则安全性检查工具")
+
 然而，这两个都不能够检查到所有的脆弱的正则表达式。<br />
 另一个途径就是使用不同的正则引擎。你可以使用node-re2模块，一个使用了Google的极速RE2的正则引擎。警告，RE2不是100%兼容Node的正则表达式，所以如果你用node-re2模块来处理你的正则表达式，就必须回归检查一下。特别复杂的正则表达式是不被node-re2支持的。<br />
 如果你尝试匹配一些“明显”的东西，像URL或者是文件路径之类的，可以从[正则库（regexp library）](http://www.regexlib.com/ "正则库（regexp library）")里找个例子或者使用一个npm模块，例如[ip-regex](https://www.npmjs.com/package/ip-regex "re-regex")。
+
+### 阻塞事件循环：Node的核心模块 ###
+一些Node的核心模块有同步的重型API，包括：
+* [Encryption](https://nodejs.org/api/crypto.html "Encryption")
+* [Compression](https://nodejs.org/api/zlib.html "Compression")
+* [File system](https://nodejs.org/api/fs.html "File system")
+* [Child process](https://nodejs.org/api/child_process.html "Child process")
+
+这些API是繁重的，因为他们都包含了繁重的计算任务（encryption, compression）、请求I/O（File System）或者可能两者都包含（Child process）。这部分（同步的）APIs是为方便脚本编写而设计的，但并不打算在服务器环境中使用。如果你在事件循环里执行它们，那将花上远比普通JS指令更长的时间来完成。<br />
+在服务器里，_你不应该使用这些模块中以下的APIs：_
+* Encryption：
+  * `crypto.randomBytes` （同步版本）
+  * `crypto.randomFillSync`
+  * `crypto.pbkdf2Sync`
+  * 你也应该小心那些提供大型的输入给加密和解密的日常其他API。
+* Compression：
+  * `zlib.inflateSync`
+  * `zlib.deflateSync`
+* File system：
+  * 别使用同步的文件系统APIs。例如，如果你正在访问的文件是在像[NFS](https://en.wikipedia.org/wiki/Network_File_System)那样的[分布式文件系统](https://en.wikipedia.org/wiki/Clustered_file_system#Distributed_file_systems "distributed file system 分布式文件系统")里，那么访问时间是无法想象的。
+* Child process：
+  * `child_process.spawnSync`
+  * `child_process.execSync`
+  * `child_process.execFileSync`
+
+这个列表截至到Node V9版本还是完整的。
+
+### 阻塞事件循环：JSON DOS（拒绝服务） ###
+`JSON.parse` 和 `JSON.stringify`是其他的潜在的重型操作。虽然这些（操作时间）是输入长度的`0(n)`，但是对于大的`n`，操作时间可能是出奇地长。<br />
+如果你的服务器操作JSON对象，特别是那些来自于客户的，对于需要你在事件循环里处理的JSON对象或字符串的大小，你就应该特别谨慎了。<br />
+例子：JSON阻塞。我们创建一个2^21大小的对象`obj`，然后用`JSON.stringify`它，在字符串上执行`indexOf`，最后用`JSON.parse`一下它。`JSON.stringify`后的字符串有50MB，花了0.7秒来完成，然后花了0.03秒来在这个50MB的字符串上完成`indexOf`，然后花上1.3秒来完成对这个字符串的`JSON.parse`操作。
+```js
+var obj = { a: 1 };
+var niter = 20;
+
+var before, res, took;
+
+for (var i = 0; i < len; i++) {
+  obj = { obj1: obj, obj2: obj }; // Doubles in size each iter
+}
+
+before = process.hrtime();
+res = JSON.stringify(obj);
+took = process.hrtime(n);
+console.log('JSON.stringify took ' + took);
+
+before = process.hrtime();
+res = str.indexOf('nomatch');
+took = process.hrtime(n);
+console.log('Pure indexof took ' + took);
+
+before = process.hrtime();
+res = JSON.parse(str);
+took = process.hrtime(n);
+console.log('JSON.parse took ' + took);
+```
+这里有一些npm的模块，提供了异步的JSON API，比如说：
+* [JSONStream](https://www.npmjs.com/package/JSONStream)，拥有流式API。
+* [Big-Friendly JSON](https://github.com/philbooth/bfj)，拥有流式API，就像是JSON标准APIs的异步版本，使用了下面提到的事件循环上的分区（partitioning-on-the-Event-Loop）模式。
+
+### 无需阻塞事件循环的复杂运算 ###
+或许你想用Javascript来作一些复杂的运算而不想因此阻塞事件循环。那你有两种选择：分区（partitioning）和分流（或称负载转移，offloading）。<br />
+
+分区（partitioning）<br />
+你可以拆分你的计算，这样的话每一次在事件循环上的运行（后），都会定期地（把资源）分配给其他正在等待的事件（来处理）。在Javascript里，是很容易在一个闭包里保存一个正在运行的任务的状态，就像下面的范例2中的一样。<br />
+举个简单的例子，试想你要计算数字`1`到`n`的平均数。<br />
+例子1，无分割的平均数计算，代价`0(n)`：
+```js
+for (let i = 0; i < n; i++)
+  sum += i;
+let avg = sum / n;
+console.log('avg: ' + avg);
+```
+例子2，分割的平均数计算，每个n的异步步骤代价`0(1)`：
+```js
+function asyncAvg(n, avgCB) {
+  // Save ongoing sum in JS closure.
+  var sum = 0;
+  function help(i, cb) {
+    sum += i;
+    if (i == n) {
+      cb(sum);
+      return;
+    }
+
+    // "Asynchronous recursion".
+    // Schedule next operation asynchronously.
+    setImmediate(help.bind(null, i+1, cb));
+  }
+
+  // Start the helper, with CB to call avgCB.
+  help(1, function(sum){
+      var avg = sum/n;
+      avgCB(avg);
+  });
+}
+
+asyncAvg(n, function(avg){
+  console.log('avg of 1-n: ' + avg);
+});
+```
+你可以把这个原则应用在数组的轮询或者之类的场景中。
+
+分流（offloading）<br />
+如果你要做一些更加复杂的事情，分区并不是一个很好的选择。这是因为分区只用了事件循环，在你的机器上，几乎可以肯定的说，你将不会从多核cpu中获益。*谨记：事件循环应该调配用户的请求，而不是去实现它们*。对于一个复杂的任务来说，就是把工作从事件循环移交到工作池中。
+
+如何分流<br />
+对于需要被分流工作的目标工作池，你有两个选择：<br />
+1. 你可以通过开发一个[c++ addon](https://nodejs.org/api/addons.html "c++ addon")来使用Node内置的工作池。在旧版本的Node中，构建你自己的C++ addon用[NAN](https://github.com/nodejs/nan "NAN")，而新版本的用[N-API](https://github.com/nodejs/nan "N-API")。[node-webworker-threads](https://www.npmjs.com/package/webworker-threads "node-webworker-threads")提供了一种Javascript专享的方式来访问Node的工作池。
+2. 你可以创建和管理你自己的工作池专注用于计算，而非Node的I/O专用工作池。最直接的方式就是使用[Child Process](https://nodejs.org/api/child_process.html "Child Process")或者[Cluster](https://nodejs.org/api/cluster.html "Cluster")。
+
+你不应该简单地为每个用户都创建一个[Child Process](https://nodejs.org/api/child_process.html "Child Process")。这样的话，你就可以比创建和管理子线程更快地接收用户请求，而你的服务器则可能会成为一个[叉路炸弹](https://en.wikipedia.org/wiki/Fork_bomb "fork bomb 叉路炸弹")。
+
+分流的缺陷<br />
+分流方法的缺陷是会带来额外的*通讯开销*。只有事件循环才被允许看到应用的“命名空间”（Javascript状态）。你是不能从作业者里来操纵一个在事件循环命名空间里头的Javascript对象的。因此，你必须序列化或者反序列化任何你想要共享的对象。然后作业者就可以操作它自己的那些对象拷贝和返回修改过的对象(或者一个“补丁”）给事件循环。<br />
+关于对序列化的担忧，请回去看一下JSON DOS攻击的部分。
+
+关于分流的一些建议<br />
+你可能会希望分辨出CPU密集型和I/O密集型的任务，因为他们有显著不同的特征。<br />
+一个CPU密集型的任务，只会在作业者被调度的时候进行，而作业者必须基于你的机器的逻辑内核之上来被调度。如果你有4个逻辑内核和5个作业者，那么这些作业者当中的一个将不能处理。因此，你就会为这个作业者支付开销（内存或者调度成本）,却不能得到返回。<br />
+I/O密集型的任务牵涉到外部的服务提供者（DNS，文件系统等等）和等待它们的返回。当一个有I/O密集型任务的作业者正在等待它的返回，它就什么也做不了，会被系统取消调度，给其他作业者提交它们请求的机会。因此，*即使相应线程没有在运行，I/O密集型的任务也会取得进展*。外部服务的提供者，像数据库和文件系统之类的，已经被高度优化来处理许多并行的等待请求。例如，一个文件系统会测试一个大型的正在等待的读写请求集合，合并存在冲突的更新，用一个经过优化的顺序来获取文件（请查看[这些内容](http://researcher.ibm.com/researcher/files/il-AVISHAY/01-block_io-v1.3.pdf)）。<br />
+如果你只依赖一个工作池，例如Node的工作池，那么CPU密集型和I/O密集型的任务的不同特性可能会损害应用程序的性能。<br />
+基于这个原因，你可能会希望能够维护一个独立的计算工作池。
+
+分流：总结<br />
+对于简单的任务，像轮询一个超级长的数组里面的元素，用分区可能是一个好的选择。如果你的计算较复杂，分流就是一个更好的途径：通讯开销，也就是在事件循环和工作池之间传递序列化对象的开销，被多核带来的好处抵消。<br />
+然而，如果你的服务重度依赖复杂计算，你应该考虑Node是否真的很适合。Node的优势在于I/O绑定型的工作，但对于重度计算，它可能不是一个最好的选择。
+
+### 别阻塞工作池 ###
+Node的工作池由`k`作业者组成。如果你在使用上面讨论到的分流模式，你可能会有一个独立的计算工作池，同样也适用于该池（也是由`k`作业者组成）。无论如何，让我们假设`k`作业者比那些需要你并行处理的用户数小得多。这就是保持了Node的“一个线程服务于多用户”的哲学，它可扩展性强的秘密。<br />
+就像我们上面谈到的，在处理工作池队列中的下一个任务之前，作业者都会完成当前的任务。<br />
+现在，处理用户请求的任务开销会有所不同。有些任务会很快完成（例如：读取短的或者缓存的文件；产生一个小数量级的随机数），其他会花上更长时间（例如：读取大的或者未缓存的文件；生成很多随机数）。你的目标就应该是*最小化任务时间的变化*，你应该用*任务分区*来达成。
+
+最小化任务时间变化<br />
+如果一个作业者的当前任务比其他任务重得多，那它将无法为其他等待中的任务工作。换句话说，*每个相对较长（需要更长时间处理）的任务都会有效减少工作池的大小，直到它被处理完为止*。这是不合需求的，因为，基于这一点，工作池中的作业者越多，工作池的吞吐量（任务数/秒）就越大，因此服务器的吞吐量（请求数/秒）就越大。一个拥有相对重度任务的用户会降低工作池的吞吐量，因而降低服务器的吞吐量。<br />
+两个例子应该可以说明任务时间上可能的变化。
+
+变化的例子：长时间运行的文件系统读取<br />
+假设你的服务器必须读取一些文件来处理客户请求。在请求完Node的[文件系统](https://nodejs.org/api/fs.html "File System")APIs后，为了简单起见，你选择使用`file.readFile(）`。然而，`file.readFile(）`（[目前](https://github.com/nodejs/node/pull/17054)）并不是已分区的：它提交了一个跨越了整个文件的`fs.read()`任务。如果你为一些用户读取较短的文件，为其他用户读取较长的文件，`file.readFile(）`就可能会引入任务长度上明显的变化，从而来决定工作池的吞吐量。
+
 
 ===未完待续===To be Continue===
