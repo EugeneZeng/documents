@@ -14,3 +14,5 @@ Some documents, include that translated from English version and written by myse
 [别阻塞事件循环（或工作池）](/DontBlockTheEventLoopOrWorkerPool_cn.md "别阻塞事件循环（或工作池）")
 
 [NodeJS的事件循环，定时器和process.nextTick()](/NodejsEventLoopTimerAndProcessNextTick_cn.md "NodeJS的事件循环，定时器和process.nextTick()")
+
+[Node.js里及超越Node.js的定时器](/TimersInNodejsAndBeyond_ch.md "Node.js里及超越Node.js的定时器")
