@@ -96,7 +96,7 @@ clearInterval(intervalObj);
 
 ### 留下超时 ###
 
-请记住`Timeout`对象是由`setTimeout`和`setInterval`方法返回的。`Timeout`对象提供了两个方法，想要用`unref()`和 `ref()`方法来增强`Timeout`的行为。如果有一个`Timeout`对象用一个`set`方法来预订，`unref()`就可以被这个对象调用。这将会略微改变这个行为，而不会调用这个`Timeout`对象，_如果它是需要运行的最终代码_。`Timeout`对象将不会保持运行，等待运行。
+请记住`Timeout`对象是由`setTimeout`和`setInterval`方法返回的。`Timeout`对象提供了两个方法，想要用`unref()`和 `ref()`方法来增强`Timeout`的行为。如果有一个`Timeout`对象用一个`set`方法来预订，`unref()`就可以被这个对象调用。这将会略微改变这个行为，而不会调用这个`Timeout`对象，_如果它是需要运行的最终代码_。`Timeout`对象将不会使进程保持活动，等待执行。
 
 类似的方式，一个在上面执行了`unref()`方法的`Timeout`对象可以通过在同一个对象上调用`ref()`方法来移除那个行为，这样就会保证它的运行。然而，由于性能原因，这并不能完全恢复初始行为。请看以下两个例子：
 
