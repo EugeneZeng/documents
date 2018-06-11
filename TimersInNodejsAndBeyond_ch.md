@@ -58,3 +58,65 @@ executing immediate: so immediate
 
 ### “无限循环”执行 ～ `setInterval()` ###
 
+如果有一个代码块需要被多次执行，`setInterval()`就可以用来执行这个代码。`setInterval()`接收一个方法作为参数，将用作为第二参数的毫秒数延时间隔执行无限次数。像`setTimeout()`一样，随后的其他参数可以添加在延时值的后面，将被传入给第一个方法运行时候作为参数使用。同样地也像`setTimeout()`一样，这些延时不能被保证，因为操作有可能会中止事件循环，因此它应该被视为是一个大约的延时。请看下面的例子：
+
+```js
+function intervalFunc() {
+  console.log('Cant stop me now!');
+}
+
+setInterval(intervalFunc, 1500);
+```
+
+在上面的例子中，`intervalFunc()`将会在每大约1500毫秒（1.5秒）后执行一次，直到它被终止（下面会提到）。
+
+就像`setTimeout()`一样，`setInterval()`也返回一个`Timeout`对象，可以用来指向和修改这个已经被设置好的Interval。
+
+### 未来清除 ###
+
+如果一个`Timeout`或者`Immediate`对象需要被取消，需要做什么呢？`setTimeout()`，`setImmediate()`和 `setInterval()`返回了一个定时器对象，用来指向设置好的`Timeout`或者`Immediate`对象。通过传递这个对象给相应的`clear`函数，这个对象的执行将会被完全停止。这些相应的方法是`clearTimeout()`，`clearImmediate()`和`clearInterval()`。请看下面的例子：
+
+```js
+const timeoutObj = setTimeout(() => {
+  console.log('timeout beyond time');
+}, 1500);
+
+const immediateObj = setImmediate(() => {
+  console.log('immediately executing immediate');
+});
+
+const intervalObj = setInterval(() => {
+  console.log('interviewing the interval');
+}, 500);
+
+clearTimeout(timeoutObj);
+clearImmediate(immediateObj);
+clearInterval(intervalObj);
+```
+
+### 留下超时 ###
+
+请记住`Timeout`对象是由`setTimeout`和`setInterval`方法返回的。`Timeout`对象提供了两个方法，想要用`unref()`和 `ref()`方法来增强`Timeout`的行为。如果有一个`Timeout`对象用一个`set`方法来预订，`unref()`就可以被这个对象调用。这将会略微改变这个行为，而不会调用这个`Timeout`对象，_如果它是需要运行的最终代码_。`Timeout`对象将不会保持运行，等待运行。
+
+类似的方式，一个在上面执行了`unref()`方法的`Timeout`对象可以通过在同一个对象上调用`ref()`方法来移除那个行为，这样就会保证它的运行。然而，由于性能原因，这并不能完全恢复初始行为。请看以下两个例子：
+
+```js
+const timerObj = setTimeout(() => {
+  console.log('will i run?');
+});
+
+// if left alone, this statement will keep the above
+// timeout from running, since the timeout will be the only
+// thing keeping the program from exiting
+timerObj.unref();
+
+// we can bring it back to life by calling ref() inside
+// an immediate
+setImmediate(() => {
+  timerObj.ref();
+});
+```
+
+### 事件循环之后 ###
+
+事件循环和定时器比本文档提到的内容要多得多。要了解更多关于Node.js的事件循环内幕以及定时器在运行的时候怎么操作，请阅读Node.js的这个指南：[NodeJS的事件循环，定时器和process.nextTick()](/NodejsEventLoopTimerAndProcessNextTick_cn.md "NodeJS的事件循环，定时器和process.nextTick()")
