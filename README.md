@@ -1,4 +1,5 @@
-# documents
+# documents #
+## 已经迁移到GitLab，请移步到[这里](https://gitlab.com/EugrneZeng/studynotes) ##
 Some documents, include that translated from English version and written by myself.
 
 ## Javascript相关 ##
